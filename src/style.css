@@ -1,0 +1,303 @@
+/* ── Reset ── */
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #0d0d14;
+}
+
+canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ── GUI overlay ── */
+#gui {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.gui-panel {
+  pointer-events: all;
+  background: rgba(10, 10, 18, 0.88);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 12px;
+  padding: 16px 18px;
+  color: #e0e8ff;
+  width: 270px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+}
+
+.gui-title {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin-bottom: 14px;
+  color: #a8c8ff;
+}
+
+.gui-section {
+  margin-bottom: 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  padding-bottom: 14px;
+}
+
+.gui-section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.gui-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #6888bb;
+  margin-bottom: 8px;
+}
+
+/* ── Shading model buttons ── */
+.model-btns {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.model-btn {
+  flex: 1 1 auto;
+  padding: 5px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  background: rgba(255,255,255,0.05);
+  color: #8aacdd;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.model-btn:hover {
+  background: rgba(100,160,255,0.15);
+  color: #c4daff;
+  border-color: rgba(100,160,255,0.35);
+}
+
+.model-btn.active {
+  background: rgba(74, 158, 255, 0.25);
+  color: #d0e8ff;
+  border-color: rgba(74, 158, 255, 0.60);
+}
+
+.model-desc {
+  font-size: 11px;
+  line-height: 1.55;
+  color: #8899bb;
+  min-height: 36px;
+  padding: 4px 0;
+}
+
+/* ── Sliders ── */
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.slider-label {
+  font-size: 11px;
+  color: #8899bb;
+  width: 86px;
+  flex-shrink: 0;
+}
+
+.slider-row input[type="range"] {
+  flex: 1;
+  accent-color: #4a9eff;
+  height: 4px;
+  cursor: pointer;
+}
+
+.slider-val {
+  font-size: 11px;
+  color: #a0bce0;
+  width: 32px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Checkbox ── */
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #8899bb;
+  cursor: pointer;
+  margin-top: 4px;
+}
+
+.checkbox-row input {
+  accent-color: #4a9eff;
+}
+
+/* ── Color pickers ── */
+.color-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: #8899bb;
+}
+
+.color-row input[type="color"] {
+  width: 40px;
+  height: 24px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  background: none;
+  padding: 0;
+}
+
+/* ── Hint ── */
+.gui-hint {
+  font-size: 10px;
+  color: #445566;
+  text-align: center;
+  margin-top: 10px;
+  letter-spacing: 0.04em;
+  line-height: 1.6;
+}
+
+/* ── Two-panel layout ── */
+#gui {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  right: 16px;
+  z-index: 100;
+  pointer-events: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+/* ── Button row ── */
+.btn-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.btn-row button {
+  flex: 1 1 auto;
+  padding: 5px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  background: rgba(255,255,255,0.05);
+  color: #8aacdd;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.btn-row button:hover {
+  background: rgba(100,160,255,0.15);
+  color: #c4daff;
+}
+
+/* ── Render mode buttons ── */
+.mode-btn {
+  flex: 1 1 auto;
+  padding: 5px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  background: rgba(255,255,255,0.05);
+  color: #8aacdd;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.mode-btn:hover {
+  background: rgba(100,160,255,0.15);
+  color: #c4daff;
+  border-color: rgba(100,160,255,0.35);
+}
+
+.mode-btn.active {
+  background: rgba(74,158,255,0.25);
+  color: #d0e8ff;
+  border-color: rgba(74,158,255,0.60);
+}
+
+.mode-desc {
+  font-size: 11px;
+  line-height: 1.55;
+  color: #8899bb;
+  min-height: 32px;
+  padding: 4px 0;
+}
+
+/* ── Object list ── */
+#object-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.obj-list-btn {
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  font-size: 11px;
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 6px;
+  background: rgba(255,255,255,0.04);
+  color: #8aacdd;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.obj-list-btn:hover {
+  background: rgba(100,160,255,0.12);
+  color: #c4daff;
+}
+
+.obj-list-btn.active {
+  background: rgba(74,158,255,0.22);
+  color: #d0e8ff;
+  border-color: rgba(74,158,255,0.5);
+}
+
+/* ── Inspector sub-labels ── */
+.inspector-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #a0c0ee;
+  margin-bottom: 8px;
+}
+
+/* ── File inputs ── */
+.file-input {
+  display: block;
+  width: 100%;
+  font-size: 11px;
+  color: #8899bb;
+  margin-bottom: 6px;
+  cursor: pointer;
+}
