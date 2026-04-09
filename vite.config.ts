@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 
 export default defineConfig({
-  base: "/webgpu_1/",
+  base: "/Objetc_Shading/",
   build: {
     rollupOptions: {
       input: {

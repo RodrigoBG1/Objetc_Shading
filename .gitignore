@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+__MACOSX/._data
+__MACOSX/data/._KAUST_Beacon.obj
+__MACOSX/data/._teapot.obj
+__MACOSX/data/._teapot_with_normals.obj
+data/KAUST_Beacon.obj
+data/teapot.obj
+data/teapot_with_normals.obj
