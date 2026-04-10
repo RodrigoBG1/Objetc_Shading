@@ -1,176 +1,166 @@
-// =============================================================================
-// shader.wgsl  --  Object-order graphics pipeline
-//
-// render_mode values (global, same for all objects):
-//   0  Gouraud      per-vertex lighting, interpolated colour
-//   1  Phong        per-fragment lighting
-//   2  Normal buf   world-space normals as RGB  (R=X G=Y B=Z, remapped 0..1)
-//   3  Wireframe    black edges on white fill, hidden surfaces via z-buffer
-//   4  Depth        linear depth greyscale
-//   5  Texture      texture x Phong lighting
-//   6  UV coords    u->R  v->G  0->B  (black=0,0  red=1,0  green=0,1  yellow=1,1)
-//
-// Per-object uniform buffer -- one per SceneObject instance.
-// =============================================================================
+// todos los datos que le mando desde el CPU a cada objeto
+// tienen que estar en el mismo orden que en el TypeScript
+struct PerObjectUBO {
+  mvpMatrix    : mat4x4<f32>,  // model * view * projection junta todo
+  worldMatrix  : mat4x4<f32>,  // solo mueve el objeto al mundo
+  normalMatrix : mat4x4<f32>,  // es la transpuesta de la inversa del worldMatrix, para transformar normales bien
+  viewMatrix   : mat4x4<f32>,  // donde esta la camara
 
-struct Uniforms {
-  mvp         : mat4x4<f32>,   // Model-View-Projection
-  model       : mat4x4<f32>,   // Model -> World
-  normalMat   : mat4x4<f32>,   // transpose(inverse(model))
-  view        : mat4x4<f32>,   // View matrix
+  lightPosition : vec3<f32>,
+  _pad0         : f32,         // relleno porque los vec3 necesitan estar alineados a 16 bytes
 
-  lightPos    : vec3<f32>,
-  _p0         : f32,
+  lightTint     : vec3<f32>,   // color de la luz (rgb)
+  _pad1         : f32,
 
-  lightColor  : vec3<f32>,
-  _p1         : f32,
+  Ka         : f32,   // coeficiente ambiental
+  Kd         : f32,   // coeficiente difuso
+  Ks         : f32,   // coeficiente especular
+  shininess  : f32,   // que tan brilloso es, entre mas alto mas pequeno el brillo
 
-  ambient     : f32,
-  diffuse     : f32,
-  specular    : f32,
-  shininess   : f32,
+  eyePosition  : vec3<f32>,   // posicion de la camara en el mundo
+  shadingMode  : u32,          // 0=gouraud 1=phong 2=normales 3=wireframe 4=depth 5=textura 6=uv
 
-  camPos      : vec3<f32>,
-  render_mode : u32,
+  albedoColor  : vec3<f32>,   // color base del objeto
+  texEnabled   : u32,          // si es 1 usa textura, si es 0 no
 
-  objectColor : vec3<f32>,
-  use_texture : u32,
-
-  time        : f32,
-  is_selected : u32,   // 1 = draw selection outline tint
-  _p2         : f32,
-  _p3         : f32,
+  elapsed      : f32,          // tiempo en segundos desde que empezo
+  highlighted  : u32,          // 1 si el objeto esta seleccionado
+  _pad2        : f32,
+  _pad3        : f32,
 };
 
-@group(0) @binding(0) var<uniform> u        : Uniforms;
-@group(0) @binding(1) var          tex_samp : sampler;
-@group(0) @binding(2) var          tex_img  : texture_2d<f32>;
+// binding 0 = uniforms, 1 = sampler, 2 = textura
+@group(0) @binding(0) var<uniform> ubo       : PerObjectUBO;
+@group(0) @binding(1) var          smp       : sampler;
+@group(0) @binding(2) var          albedoTex : texture_2d<f32>;
 
-// -- Vertex I/O ----------------------------------------------------------------
-// Stride: [pos3, norm3, bary3, uv2]  --  11 floats = 44 bytes
-struct VSIn {
-  @location(0) position    : vec3<f32>,
-  @location(1) normal      : vec3<f32>,
-  @location(2) barycentric : vec3<f32>,
-  @location(3) uv          : vec2<f32>,
+// lo que le entra al vertex shader desde el buffer de vertices
+// stride de 44 bytes: pos(12) + nrm(12) + bary(12) + uv(8)
+struct VertIn {
+  @location(0) pos  : vec3<f32>,  // posicion xyz
+  @location(1) nrm  : vec3<f32>,  // normal xyz
+  @location(2) bary : vec3<f32>,  // coordenadas baricentricas del triangulo
+  @location(3) uv   : vec2<f32>,  // coordenadas de textura
 };
 
-struct VSOut {
-  @builtin(position) clipPos : vec4<f32>,
-  @location(0) worldPos      : vec3<f32>,
-  @location(1) worldNormal   : vec3<f32>,
-  @location(2) barycentric   : vec3<f32>,
-  @location(3) uv            : vec2<f32>,
-  @location(4) gouraudColor  : vec3<f32>,
-  @location(5) depth         : f32,
+// lo que sale del vertex shader y llega interpolado al fragment shader
+struct VertOut {
+  @builtin(position) clip : vec4<f32>,  // posicion en clip space, obligatoria
+  @location(0) wPos       : vec3<f32>,  // posicion en espacio mundo
+  @location(1) wNrm       : vec3<f32>,  // normal en espacio mundo
+  @location(2) bary       : vec3<f32>,  // baricentricas (para wireframe)
+  @location(3) texCoord   : vec2<f32>,  // uv para muestrear textura
+  @location(4) gouraud    : vec3<f32>,  // color calculado en el vertex (solo modo gouraud)
+  @location(5) ndcDepth   : f32,        // profundidad normalizada para el modo depth
 };
 
-// -- Lighting ------------------------------------------------------------------
-// Blinn-Phong: uses half-vector H for specular (avoids mirror reflection issues)
-fn phongLight(N: vec3<f32>, worldPos: vec3<f32>, baseColor: vec3<f32>) -> vec3<f32> {
-  let L = normalize(u.lightPos - worldPos);
-  let V = normalize(u.camPos   - worldPos);
+// calcula la iluminacion Blinn-Phong para un punto de la superficie
+// uso el half-vector en vez del vector de reflexion porque es mas barato y se ve mejor
+fn blinnPhong(surfNormal: vec3<f32>, fragPos: vec3<f32>, surfColor: vec3<f32>) -> vec3<f32> {
+  let toLight  = normalize(ubo.lightPosition - fragPos);  // direccion hacia la luz
+  let toCamera = normalize(ubo.eyePosition   - fragPos);  // direccion hacia la camara
 
-  let ambientC = u.ambient * u.lightColor;
-  let NdotL    = max(dot(N, L), 0.0);
-  let diffuseC = u.diffuse * NdotL * u.lightColor;
+  let ambient = ubo.Ka * ubo.lightTint;                   // luz ambiente siempre presente
 
-  var specC = vec3<f32>(0.0);
-  if NdotL > 0.0 {
-    let H = normalize(L + V);
-    specC = u.specular * pow(max(dot(N, H), 0.0), u.shininess) * u.lightColor;
+  let NdL     = max(dot(surfNormal, toLight), 0.0);       // cuanto apunta la normal hacia la luz
+  let diffuse = ubo.Kd * NdL * ubo.lightTint;             // luz difusa depende del angulo
+
+  var specular = vec3<f32>(0.0);
+  if NdL > 0.0 {
+    // half-vector es el vector entre la luz y la camara
+    let H   = normalize(toLight + toCamera);
+    let NdH = max(dot(surfNormal, H), 0.0);
+    specular = ubo.Ks * pow(NdH, ubo.shininess) * ubo.lightTint;
   }
-  return (ambientC + diffuseC + specC) * baseColor;
+
+  return (ambient + diffuse + specular) * surfColor;
 }
 
-// -- Vertex shader -------------------------------------------------------------
+// vertex shader: corre una vez por cada vertice
 @vertex
-fn vs_main(in: VSIn) -> VSOut {
-  var out: VSOut;
+fn vs_main(vtx: VertIn) -> VertOut {
+  var out: VertOut;
 
-  let wp4 = u.model     * vec4<f32>(in.position, 1.0);
-  let wn4 = u.normalMat * vec4<f32>(in.normal,   0.0);
+  // transformo posicion y normal al espacio mundo
+  let worldPos4 = ubo.worldMatrix  * vec4<f32>(vtx.pos, 1.0);
+  let worldNrm4 = ubo.normalMatrix * vec4<f32>(vtx.nrm, 0.0);  // w=0 porque es direccion no punto
 
-  out.clipPos     = u.mvp * vec4<f32>(in.position, 1.0);
-  out.worldPos    = wp4.xyz;
-  out.worldNormal = normalize(wn4.xyz);
-  out.barycentric = in.barycentric;
-  out.uv          = in.uv;
-  out.depth       = out.clipPos.z / out.clipPos.w;
+  out.clip     = ubo.mvpMatrix * vec4<f32>(vtx.pos, 1.0);  // posicion final en pantalla
+  out.wPos     = worldPos4.xyz;
+  out.wNrm     = normalize(worldNrm4.xyz);  // normalizo porque la escala puede deformarla
+  out.bary     = vtx.bary;
+  out.texCoord = vtx.uv;
+  out.ndcDepth = out.clip.z / out.clip.w;   // depth en NDC [-1, 1]
 
-  // Gouraud: compute lighting per-vertex so the fragment shader just reads it
-  if u.render_mode == 0u {
-    out.gouraudColor = phongLight(out.worldNormal, out.worldPos, u.objectColor);
+  // en modo gouraud calculo la luz aqui por vertice
+  // en los demas modos lo dejo en 0 y lo calculo en el fragment shader
+  if ubo.shadingMode == 0u {
+    out.gouraud = blinnPhong(out.wNrm, out.wPos, ubo.albedoColor);
   } else {
-    out.gouraudColor = vec3<f32>(0.0);
+    out.gouraud = vec3<f32>(0.0);
   }
 
   return out;
 }
 
-// -- Fragment shader -----------------------------------------------------------
+// fragment shader: corre una vez por cada pixel de cada triangulo
 @fragment
-fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
-  let N = normalize(in.worldNormal);
+fn fs_main(frag: VertOut) -> @location(0) vec4<f32> {
+  // renormalizo porque la interpolacion entre vertices puede acortar el vector
+  let N = normalize(frag.wNrm);
 
-  // Base colour: object colour, optionally modulated by texture
-  var baseColor = u.objectColor;
-  if u.use_texture == 1u {
-    baseColor = baseColor * textureSample(tex_img, tex_samp, in.uv).rgb;
+  // color base del objeto, si hay textura la multiplico encima
+  var surfColor = ubo.albedoColor;
+  if ubo.texEnabled == 1u {
+    surfColor = surfColor * textureSample(albedoTex, smp, frag.texCoord).rgb;
   }
 
-  var color: vec3<f32>;
+  var outColor: vec3<f32>;
 
-  switch u.render_mode {
-
-    // Gouraud: colour was computed per-vertex and interpolated by GPU
+  switch ubo.shadingMode {
     case 0u: {
-      color = in.gouraudColor;
-      if u.use_texture == 1u {
-        color = color * textureSample(tex_img, tex_samp, in.uv).rgb;
+      // gouraud: el color ya viene calculado del vertex shader, solo lo paso
+      outColor = frag.gouraud;
+      if ubo.texEnabled == 1u {
+        outColor = outColor * textureSample(albedoTex, smp, frag.texCoord).rgb;
       }
     }
-
-    // Phong: per-fragment lighting with interpolated normals
     case 1u: {
-      color = phongLight(N, in.worldPos, baseColor);
+      // phong: calculo la iluminacion por pixel con la normal interpolada
+      outColor = blinnPhong(N, frag.wPos, surfColor);
     }
-
-    // Normal buffer: remap world-space normals [-1,1] -> [0,1]
     case 2u: {
-      color = N * 0.5 + vec3<f32>(0.5);
+      // visualizo las normales como color: remap de [-1,1] a [0,1]
+      // normal apuntando a +X = rojo, +Y = verde, +Z = azul
+      outColor = N * 0.5 + vec3<f32>(0.5);
     }
-
-    // Wireframe: black edges on white fill via barycentric edge detection
     case 3u: {
-      let edge = min(in.barycentric.x, min(in.barycentric.y, in.barycentric.z));
-      let wire = 1.0 - smoothstep(0.0, 0.018, edge);
-      let grey = 1.0 - wire;   // white fill, black edge
-      color = vec3<f32>(grey);
+      // wireframe usando coordenadas baricentricas
+      // el pixel mas cercano a un borde tiene el minimo baricentrico cerca de 0
+      let minBary  = min(frag.bary.x, min(frag.bary.y, frag.bary.z));
+      let edgeMask = 1.0 - smoothstep(0.0, 0.018, minBary);  // suaviza el borde
+      outColor     = vec3<f32>(1.0 - edgeMask);  // borde negro, relleno blanco
     }
-
-    // Depth: linear NDC depth remapped to [0,1] greyscale
     case 4u: {
-      let d = (in.depth + 1.0) * 0.5;
-      color = vec3<f32>(d);
+      // depth: convierto la profundidad NDC a escala de grises
+      let linearDepth = (frag.ndcDepth + 1.0) * 0.5;  // paso de [-1,1] a [0,1]
+      outColor = vec3<f32>(linearDepth);
     }
-
-    // Texture x Phong: sample texture, multiply by Phong lighting
     case 5u: {
-      let tc = textureSample(tex_img, tex_samp, in.uv).rgb;
-      color = phongLight(N, in.worldPos, tc);
+      // textura con iluminacion phong encima
+      let texSample = textureSample(albedoTex, smp, frag.texCoord).rgb;
+      outColor = blinnPhong(N, frag.wPos, texSample);
     }
-
-    // UV coords visualised as colour: U->Red, V->Green
     default: {
-      color = vec3<f32>(in.uv.x, in.uv.y, 0.0);
+      // modo UV: muestro las coordenadas de textura como color para debuggear
+      outColor = vec3<f32>(frag.texCoord.x, frag.texCoord.y, 0.0);
     }
   }
 
-  // Selection tint: brighten slightly when this object is selected
-  if u.is_selected == 1u {
-    color = color + vec3<f32>(0.08, 0.08, 0.0);
+  // si el objeto esta seleccionado le agrego un tinte amarillento
+  if ubo.highlighted == 1u {
+    outColor += vec3<f32>(0.08, 0.08, 0.0);
   }
 
-  return vec4<f32>(color, 1.0);
+  return vec4<f32>(outColor, 1.0);
 }
