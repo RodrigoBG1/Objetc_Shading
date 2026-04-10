@@ -73,7 +73,7 @@ export class ArcballCamera {
 
   private _distance = 9;
   private _radius   = 1; // used to clamp minimum zoom distance
-  private _far      = 60; // fixed far plane; set by fitCamera
+  private _far      = 30; // fixed far plane; set by fitCamera
 
   /** When true, mouse drag rotates the selected object; otherwise orbits camera. */
   objectSelected = false;
