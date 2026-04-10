@@ -5,42 +5,50 @@ import { mat4 } from "./math";
 import type { Vec3, Mat4 } from "./math";
 import { ArcballCamera, quatToMat4 } from "./camera";
 
-/* WebGPU initialization */
-
+// primero hay que verificar que el navegador soporte WebGPU
+// si no lo soporta no tiene caso continuar
 if (!navigator.gpu) throw new Error("WebGPU not supported in this browser");
 
 const canvas = document.querySelector("#gfx-main") as HTMLCanvasElement;
 if (!canvas) throw new Error("Could not find canvas #gfx-main");
 
+// el adapter es como el "driver" de la GPU, y el device es con lo que trabajamos directamente
 const adapter = await navigator.gpu.requestAdapter();
 if (!adapter) throw new Error("No suitable GPU adapter found");
 
 const device  = await adapter.requestDevice();
 const ctx     = canvas.getContext("webgpu")!;
-const swapFmt = navigator.gpu.getPreferredCanvasFormat();
+const swapFmt = navigator.gpu.getPreferredCanvasFormat(); // formato de color que prefiere el sistema
 
 let depthTex: ReturnType<typeof device.createTexture> | null = null;
 
+// esta funcion se llama al inicio y cada vez que se cambia el tamaño de la ventana
+// hay que recrear el depth buffer porque su tamaño depende del canvas
 function onResize() {
+  // devicePixelRatio es para pantallas retina/HiDPI que tienen mas pixeles reales
   canvas.width  = Math.max(1, Math.floor(window.innerWidth  * devicePixelRatio));
   canvas.height = Math.max(1, Math.floor(window.innerHeight * devicePixelRatio));
   ctx.configure({ device, format: swapFmt, alphaMode: "premultiplied" });
-  depthTex?.destroy();
+  depthTex?.destroy(); // destruyo el anterior para no tener memory leak
   depthTex = device.createTexture({
     size:   [canvas.width, canvas.height],
-    format: "depth24plus",
+    format: "depth24plus",   // 24 bits de profundidad, suficiente precision
     usage:  GPUTextureUsage.RENDER_ATTACHMENT,
   });
 }
 onResize();
 window.addEventListener("resize", onResize);
 
-
+// el uniform buffer tiene 88 floats de 4 bytes = 352 bytes en total
+// este numero tiene que coincidir exactamente con el struct del shader
 const UBO_BYTES = 352;
 
 
+// compilo el shader WGSL para que la GPU lo entienda
 const shaderMod = device.createShaderModule({ label: "main-shader", code: shaderCode });
 
+// el bind group layout le dice a la GPU que recursos vamos a mandar al shader
+// binding 0 = uniforms (matrices, luz, etc), 1 = sampler, 2 = textura
 const bgl = device.createBindGroupLayout({
   entries: [
     { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
@@ -49,35 +57,37 @@ const bgl = device.createBindGroupLayout({
   ],
 });
 
+// el pipeline junta todo: shaders, formato de vertices, culling, depth test
 const renderPipeline = device.createRenderPipeline({
   layout: device.createPipelineLayout({ bindGroupLayouts: [bgl] }),
   vertex: {
     module:     shaderMod,
     entryPoint: "vs_main",
     buffers: [{
-      // 11 floats per vertex: pos(3) + norm(3) + bary(3) + uv(2)
+      // cada vertice ocupa 44 bytes: pos(12) + normal(12) + baricentrica(12) + uv(8)
       arrayStride: 44,
       attributes: [
-        { shaderLocation: 0, offset:  0, format: "float32x3" }, // position
-        { shaderLocation: 1, offset: 12, format: "float32x3" }, // normal
-        { shaderLocation: 2, offset: 24, format: "float32x3" }, // barycentric
-        { shaderLocation: 3, offset: 36, format: "float32x2" }, // uv
+        { shaderLocation: 0, offset:  0, format: "float32x3" }, // posicion xyz
+        { shaderLocation: 1, offset: 12, format: "float32x3" }, // normal xyz
+        { shaderLocation: 2, offset: 24, format: "float32x3" }, // coordenadas baricentricas
+        { shaderLocation: 3, offset: 36, format: "float32x2" }, // coordenadas uv
       ],
     }],
   },
   fragment: { module: shaderMod, entryPoint: "fs_main", targets: [{ format: swapFmt }] },
-  primitive:    { topology: "triangle-list", cullMode: "back" },
-  depthStencil: { format: "depth24plus", depthWriteEnabled: true, depthCompare: "less" },
+  primitive:    { topology: "triangle-list", cullMode: "back" }, // cullMode back = no dibujar caras traseras
+  depthStencil: { format: "depth24plus", depthWriteEnabled: true, depthCompare: "less" }, // depth test normal
 });
 
+// sampler con filtrado lineal para que la textura no se vea pixelada
+// repeat hace que la textura se repita si los UVs pasan de 1
 const trilinearSampler = device.createSampler({
   magFilter: "linear", minFilter: "linear",
   addressModeU: "repeat", addressModeV: "repeat",
 });
 
-/* GPU buffer helpers */
-
-/** 1×1 white fallback texture used when no image is loaded. */
+// cuando no hay textura cargada se necesita mandar algo a la GPU igual
+// un pixel blanco sirve para que el color del objeto no se vea afectado
 function createBlankTexture() {
   const tex = device.createTexture({
     size: [1, 1], format: "rgba8unorm",
@@ -87,12 +97,11 @@ function createBlankTexture() {
   return tex;
 }
 
-/**
- * Converts an indexed vertex array (8 f32/vtx: pos+norm+uv) into a flat
- * non-indexed array (11 f32/vtx: pos+norm+bary+uv).  Each triangle corner
- * gets a unique barycentric coordinate [1,0,0], [0,1,0] or [0,0,1] so the
- * wireframe shader can detect edges via smoothstep.
- */
+// convierte el buffer indexado (8 floats por vertice: pos+normal+uv) a uno plano
+// (11 floats por vertice: pos+normal+baricentrica+uv) sin indices
+// se necesita esto porque cada vertice de un triangulo tiene que tener su propia
+// coordenada baricentrica unica: [1,0,0], [0,1,0] o [0,0,1]
+// si fuera indexado dos triangulos compartirian el mismo vertice y no funcionaria el wireframe
 function buildFlatBuffer(vtx: Float32Array, idx: Uint32Array): Float32Array {
   const tris = idx.length / 3;
   const buf  = new Float32Array(tris * 3 * 11);
@@ -122,11 +131,9 @@ function createVertexBuffer(data: Float32Array) {
   return gpuBuf;
 }
 
-/* =========================================================================
-   Procedural geometry generators
-   ========================================================================= */
-
-/** Latitude-longitude UV sphere. Returns indexed data (8 f32/vtx). */
+// genera una esfera usando coordenadas esfericas (phi = latitud, theta = longitud)
+// rings = cuantos anillos horizontales, segments = cuantos verticales
+// en una esfera unitaria la normal de cada punto es igual a su posicion normalizada
 function makeSphere(rings: number, segments: number): { vd: Float32Array; id: Uint32Array } {
   const verts: number[] = [];
   for (let r = 0; r <= rings; r++) {
@@ -135,12 +142,14 @@ function makeSphere(rings: number, segments: number): { vd: Float32Array; id: Ui
     for (let s = 0; s <= segments; s++) {
       const theta = 2 * Math.PI * s / segments;
       const px = sp * Math.cos(theta), py = cp, pz = sp * Math.sin(theta);
+      // pos y normal son iguales en la esfera unitaria, uv viene de los angulos
       verts.push(px, py, pz,  px, py, pz,  s / segments, r / rings);
     }
   }
   const tris: number[] = [];
   for (let r = 0; r < rings; r++) {
     for (let s = 0; s < segments; s++) {
+      // cada celda del grid se divide en 2 triangulos
       const a = r * (segments + 1) + s;
       const b = a + 1, c = a + (segments + 1), d = c + 1;
       tris.push(a, c, b,  b, c, d);
@@ -149,7 +158,9 @@ function makeSphere(rings: number, segments: number): { vd: Float32Array; id: Ui
   return { vd: new Float32Array(verts), id: new Uint32Array(tris) };
 }
 
-/** Unit cube with per-face normals. Returns indexed data (8 f32/vtx). */
+// genera un cubo con normales por cara (no suavizadas entre caras)
+// cada cara tiene 4 vertices propios aunque esten en la misma posicion que otra cara
+// esto es para que las normales sean perpendiculares a cada cara exactamente
 function makeCube(): { vd: Float32Array; id: Uint32Array } {
   type Face = { n: Vec3; v: number[][] };
   const faceList: Face[] = [
@@ -170,17 +181,17 @@ function makeCube(): { vd: Float32Array; id: Uint32Array } {
   return { vd: new Float32Array(verts), id: new Uint32Array(tris) };
 }
 
-/* OBJ mesh loader */
-
+// estructura que guarda la malla ya procesada lista para subir a la GPU
 interface MeshData {
-  positions:     Float32Array;  // numVerts × 3
-  normals:       Float32Array;  // numVerts × 3  (averaged from face normals)
-  uvCoords:      Float32Array;  // numVerts × 2
-  indices:       Uint32Array;   // numTris  × 3
-  numVerts:      number;
-  numTris:       number;
+  positions: Float32Array;  // posiciones xyz de cada vertice
+  normals:   Float32Array;  // normales promediadas de las caras adyacentes
+  uvCoords:  Float32Array;  // coordenadas de textura
+  indices:   Uint32Array;   // indices de los triangulos (3 por triangulo)
+  numVerts:  number;
+  numTris:   number;
 }
 
+// helpers de matematica vectorial 3D que se necesitan para calcular normales
 function sub3(a: [number,number,number], b: [number,number,number]): [number,number,number] {
   return [a[0]-b[0], a[1]-b[1], a[2]-b[2]];
 }
@@ -188,16 +199,14 @@ function cross3(a: [number,number,number], b: [number,number,number]): [number,n
   return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
 }
 function norm3(v: [number,number,number]): [number,number,number] {
-  const mag = Math.hypot(v[0], v[1], v[2]) || 1;
+  const mag = Math.hypot(v[0], v[1], v[2]) || 1; // el || 1 evita division por cero
   return [v[0]/mag, v[1]/mag, v[2]/mag];
 }
 
-/**
- * Parses OBJ text into a GPU-ready indexed mesh.
- * - Reads v / vt / f tokens; fan-triangulates quads and n-gons.
- * - Builds per-vertex normals by averaging surrounding face normals.
- * - Falls back to spherical UV projection when the file has no vt lines.
- */
+// lee el archivo OBJ linea por linea y extrae vertices, uvs y caras
+// el formato OBJ usa indices en base 1 por eso se resta 1 al parsear
+// si el archivo tiene quads o poligonos se fan-triangula desde el primer vertice
+// si no tiene coordenadas uv se genera un mapeo esferico automaticamente
 function parseOBJText(text: string): MeshData {
   const rawPos:  [number,number,number][] = [];
   const rawUV:   [number,number][]        = [];
@@ -220,7 +229,8 @@ function parseOBJText(text: string): MeshData {
         const ui = parts[1] && parts[1] !== "" ? parseInt(parts[1]) - 1 : null;
         return [pi, ui] as FaceVert;
       });
-      // fan-triangulate: anchor at corners[0]
+      // fan-triangulation: se toma el primer vertice como pivote
+      // y se forman triangulos con los pares consecutivos del resto
       for (let k = 1; k + 1 < corners.length; k++) {
         faces.push([corners[0], corners[k], corners[k + 1]]);
       }
@@ -232,7 +242,7 @@ function parseOBJText(text: string): MeshData {
   const hasUVs  = rawUV.length > 0;
 
   const pos  = new Float32Array(nv * 3);
-  const nrm  = new Float32Array(nv * 3); // accumulated, normalized later
+  const nrm  = new Float32Array(nv * 3); // se acumulan las normales de cara y luego se normalizan
   const uv   = new Float32Array(nv * 2);
   const idx  = new Uint32Array(nf * 3);
 
@@ -242,7 +252,9 @@ function parseOBJText(text: string): MeshData {
     pos[i*3+2] = rawPos[i][2];
   }
 
-  // Build indices, compute and accumulate face normals into vertex normals
+  // por cada triangulo se calcula la normal de cara con producto cruzado
+  // esa normal se suma a los 3 vertices del triangulo (se acumula)
+  // al final se normaliza el promedio para obtener la normal suavizada del vertice
   for (let f = 0; f < nf; f++) {
     const [[a, ua], [b, ub], [c, uc]] = faces[f];
     const fn = norm3(cross3(sub3(rawPos[b], rawPos[a]), sub3(rawPos[c], rawPos[a])));
@@ -255,18 +267,18 @@ function parseOBJText(text: string): MeshData {
 
     idx[f*3] = a; idx[f*3+1] = b; idx[f*3+2] = c;
 
-    // Store UV from OBJ file (first assignment wins for shared vertices)
+    // guarda la uv del archivo obj, si el vertice ya tiene una se respeta la primera
     if (hasUVs) {
       for (const [vi, ui] of [[a,ua],[b,ub],[c,uc]] as [number, number|null][]) {
         if (ui !== null && uv[vi*2] === 0 && uv[vi*2+1] === 0) {
           uv[vi*2]   = rawUV[ui][0];
-          uv[vi*2+1] = 1 - rawUV[ui][1]; // flip V axis for WebGPU
+          uv[vi*2+1] = 1 - rawUV[ui][1]; // el eje V esta invertido entre OBJ y WebGPU
         }
       }
     }
   }
 
-  // Normalize accumulated vertex normals
+  // ya con todas las normales acumuladas se normalizan para que tengan longitud 1
   for (let i = 0; i < nv; i++) {
     const mag = Math.hypot(nrm[i*3], nrm[i*3+1], nrm[i*3+2]) || 1;
     nrm[i*3]   /= mag;
@@ -274,7 +286,8 @@ function parseOBJText(text: string): MeshData {
     nrm[i*3+2] /= mag;
   }
 
-  // Spherical UV projection fallback: u = longitude, v = latitude
+  // si el obj no tiene uvs se genera una proyeccion esferica
+  // atan2 da la longitud y asin da la latitud, se mapea a [0,1]
   if (!hasUVs) {
     for (let i = 0; i < nv; i++) {
       const nx = nrm[i*3], ny = nrm[i*3+1], nz = nrm[i*3+2];
@@ -286,7 +299,8 @@ function parseOBJText(text: string): MeshData {
   return { positions: pos, normals: nrm, uvCoords: uv, indices: idx, numVerts: nv, numTris: nf };
 }
 
-/** Interleave pos + normal + uv into 8 f32/vtx for use with buildFlatBuffer. */
+// combina posicion, normal y uv en un solo array de 8 floats por vertice
+// este formato es el que espera buildFlatBuffer para luego añadir las baricentricas
 function interleaveVertexData(mesh: MeshData): { vd: Float32Array; id: Uint32Array } {
   const vd = new Float32Array(mesh.numVerts * 8);
   for (let i = 0; i < mesh.numVerts; i++) {
@@ -297,7 +311,9 @@ function interleaveVertexData(mesh: MeshData): { vd: Float32Array; id: Uint32Arr
   return { vd, id: mesh.indices };
 }
 
-/** Compute bounding sphere (center + radius) from an axis-aligned bounding box. */
+// calcula la esfera que envuelve toda la malla
+// primero busca el bounding box (min/max en xyz) para encontrar el centro
+// luego el radio es la distancia maxima de cualquier vertice al centro
 function computeBoundingSphere(mesh: MeshData): { center: Vec3; radius: number } {
   let xMin = Infinity, yMin = Infinity, zMin = Infinity;
   let xMax = -Infinity, yMax = -Infinity, zMax = -Infinity;
@@ -325,7 +341,8 @@ function computeBoundingSphere(mesh: MeshData): { center: Vec3; radius: number }
   return { center: [cx, cy, cz], radius };
 }
 
-/* SceneObject — wraps one drawable mesh with its GPU resources */
+// cada objeto de la escena tiene su propio transform, material, textura y buffers en GPU
+// se encapsula todo junto para que sea facil manejar multiples objetos
 
 interface ObjectTransform {
   tx: number; ty: number; tz: number;
@@ -374,7 +391,7 @@ class MeshObject {
     this.bindGroup = this._buildBindGroup();
   }
 
-  /** World-space center (translation component of transform). */
+  // devuelve la posicion del objeto en el mundo (la traslacion del transform)
   center(): Vec3 { return [this.xform.tx, this.xform.ty, this.xform.tz]; }
 
   assignTexture(tex: ReturnType<typeof device.createTexture>): void {
@@ -384,7 +401,8 @@ class MeshObject {
     this.bindGroup = this._buildBindGroup();
   }
 
-  /** Compose TRS matrix: Translation × (Euler rotations × arcball) × Scale. */
+  // arma la matriz del modelo combinando traslacion, rotacion y escala
+  // el orden importa: primero escala, luego rota (arcball primero, luego euler), luego traslada
   modelMatrix(arcball: Mat4): Mat4 {
     const { tx,ty,tz, rx,ry,rz, sx,sy,sz } = this.xform;
     const T = mat4.translation(tx, ty, tz);
@@ -396,7 +414,8 @@ class MeshObject {
     return mat4.multiply(T, mat4.multiply(R, S));
   }
 
-  /** Pack all per-object uniforms and upload to the GPU uniform buffer. */
+  // empaqueta todos los datos del objeto en el uniform buffer y los sube a la GPU
+  // esto se llama cada frame porque las matrices cambian con la camara y la rotacion
   syncUniforms(
     arcball:    Mat4,
     view:       Mat4,
@@ -453,33 +472,35 @@ class MeshObject {
   }
 }
 
-/* Scene object creation helpers  */
-
+// crea un MeshObject a partir de datos de vertices e indices
+// internamente expande a buffer plano y lo sube a la GPU
 function spawnMesh(label: string, vd: Float32Array, id: Uint32Array): MeshObject {
   return new MeshObject(label, createVertexBuffer(buildFlatBuffer(vd, id)), id.length);
 }
 
+// carga un archivo OBJ completo: parsea, calcula bounding sphere,
+// centra el objeto en el origen y ajusta la camara para que quepa en pantalla
 async function importOBJ(name: string, text: string): Promise<MeshObject> {
   const mesh        = parseOBJText(text);
   const { vd, id }  = interleaveVertexData(mesh);
   const obj         = spawnMesh(name, vd, id);
   const bs          = computeBoundingSphere(mesh);
-  // Translate so the bounding-sphere center lands at the world origin
+  // se traslada el negativo del centro para que quede en el origen
   obj.xform.tx = -bs.center[0];
   obj.xform.ty = -bs.center[1];
   obj.xform.tz = -bs.center[2];
-  cam.fitCamera(bs.center, bs.radius);
+  cam.fitCamera(bs.center, bs.radius); // ajusta distancia y far plane segun el tamaño del objeto
   return obj;
 }
 
-/* Scene state  */
-
+// lista de todos los objetos en escena y cual esta seleccionado (-1 = ninguno)
 const scene: MeshObject[] = [];
 let activeIdx = -1;
 const cam = new ArcballCamera(canvas);
 cam.objectSelected = false;
 
-/** Returns the orbit target — the selected object's center or the world origin. */
+// cuando hay un objeto seleccionado la camara orbita alrededor de el
+// si no hay nada seleccionado orbita alrededor del origen
 function orbitTarget(): Vec3 {
   return activeIdx >= 0 && scene[activeIdx] ? scene[activeIdx].center() : [0, 0, 0];
 }
@@ -512,8 +533,7 @@ function deleteActive(): void {
   setActive(scene.length === 0 ? -1 : Math.max(0, activeIdx - 1));
 }
 
-/*   GUI */
-
+// estado global de la interfaz, el render mode y color de luz aplican a todos los objetos
 const appState = { renderMode: 1, lightColor: "#ffffff" };
 
 function hexToRgb(hex: string): [number, number, number] {
@@ -721,7 +741,8 @@ bindSlider("mt-shine",    (o,v) => { o.material.shininess = v; });
     scene[activeIdx].material.color = (e.target as HTMLInputElement).value;
 });
 
-// Texture upload
+// cuando se sube una imagen se convierte a textura de GPU
+// createImageBitmap decodifica la imagen y copyExternalImageToTexture la sube a la GPU
 document.getElementById("tex-upload")!.addEventListener("change", async (e) => {
   const file = (e.target as HTMLInputElement).files?.[0];
   if (!file || activeIdx < 0 || !scene[activeIdx]) return;
@@ -740,7 +761,7 @@ document.getElementById("tex-upload")!.addEventListener("change", async (e) => {
     scene[activeIdx].useTexture = (e.target as HTMLInputElement).checked ? 1 : 0;
 });
 
-/* Seed scene with a default sphere and cube  */
+// se agregan una esfera y un cubo al inicio para que la escena no este vacia
 {
   const { vd, id } = makeSphere(64, 64);
   const s = spawnMesh("Sphere", vd, id);
@@ -758,38 +779,42 @@ cam.objectSelected = false;
 rebuildObjectList();
 syncInspector();
 
-/* Render loop */
+// requestAnimationFrame llama a renderFrame ~60 veces por segundo
 const t0 = performance.now();
 
 function renderFrame(now: number): void {
-  const elapsed = (now - t0) / 1000;
+  const elapsed = (now - t0) / 1000; // tiempo en segundos
   const aspect  = canvas.width / canvas.height;
+
+  // near y far cambian segun el zoom para evitar clipping y que los objetos desaparezcan al alejar
   const [near, far] = cam.getNearFar();
-  const proj = mat4.perspective((60 * Math.PI) / 180, aspect, near, far);
+  const proj = mat4.perspective((60 * Math.PI) / 180, aspect, near, far); // camara perspectiva 60°
 
   const lightRGB: Vec3 = hexToRgb(appState.lightColor);
   const target  = orbitTarget();
   const view    = cam.getViewMatrix(target);
   const camPos  = cam.getCamPos(target);
 
-  // Light floats 5 units above the camera position in world space
+  // la luz siempre esta 5 unidades arriba de la camara en el mundo
   const lightPos: Vec3 = [camPos[0], camPos[1] + 5, camPos[2]];
 
+  // si hay objeto seleccionado usa la rotacion del arcball, si no usa la identidad
   const identityMat = quatToMat4([0, 0, 0, 1]);
   const activeRot   = activeIdx >= 0 && scene[activeIdx]
     ? cam.getObjectRotationMatrix()
     : identityMat;
 
+  // el command encoder registra todos los comandos de GPU y los manda de golpe al final
   const encoder = device.createCommandEncoder();
   const pass = encoder.beginRenderPass({
     colorAttachments: [{
       view:       ctx.getCurrentTexture().createView(),
-      clearValue: { r: 0.08, g: 0.08, b: 0.12, a: 1 },
+      clearValue: { r: 0.08, g: 0.08, b: 0.12, a: 1 }, // color de fondo azul oscuro
       loadOp: "clear", storeOp: "store",
     }],
     depthStencilAttachment: {
       view:            depthTex!.createView(),
-      depthClearValue: 1,
+      depthClearValue: 1, // 1 = lejos, los objetos cercanos tienen valor menor
       depthLoadOp:  "clear",
       depthStoreOp: "store",
     },
@@ -797,9 +822,11 @@ function renderFrame(now: number): void {
 
   pass.setPipeline(renderPipeline);
 
+  // dibuja cada objeto de la escena con sus propios uniforms
   for (let i = 0; i < scene.length; i++) {
     const obj      = scene[i];
     const isActive = i === activeIdx;
+    // el objeto seleccionado usa la rotacion activa del arcball, los demas su rotacion guardada
     const rot      = isActive ? activeRot : quatToMat4(obj.savedQuat);
     obj.syncUniforms(rot, view, proj, lightPos, lightRGB, camPos, appState.renderMode, elapsed, isActive);
     pass.setBindGroup(0, obj.bindGroup);

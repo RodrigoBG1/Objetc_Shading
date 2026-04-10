@@ -65,15 +65,15 @@ export class ArcballCamera {
   private dragStart:    [number, number, number] | null = null;
 
   // Orbit camera spherical coordinates
-  private camAzimuth   = 0;
+  private camAzimuth  = 0;
   private camElevation = 0.3;
-  private camDragging  = false;
+  private camDragging = false;
   private camDragLastX = 0;
   private camDragLastY = 0;
 
   private _distance = 9;
-  private _radius   = 1; // used to clamp minimum zoom distance
-  private _far      = 30; // fixed far plane; set by fitCamera
+  private _radius = 1; // used to clamp minimum zoom distance
+  private _far = 100; // fixed far plane; set by fitCamera
 
   /** When true, mouse drag rotates the selected object; otherwise orbits camera. */
   objectSelected = false;
