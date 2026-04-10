@@ -73,6 +73,7 @@ export class ArcballCamera {
 
   private _distance = 9;
   private _radius   = 1; // used to clamp minimum zoom distance
+  private _far      = 200; // fixed far plane; set by fitCamera
 
   /** When true, mouse drag rotates the selected object; otherwise orbits camera. */
   objectSelected = false;
@@ -125,9 +126,10 @@ export class ArcballCamera {
    * the bounding sphere.
    */
   getNearFar(): [number, number] {
-    const near = Math.max(0.001, this._distance - this._radius * 1.5);
-    const far  = this._distance + this._radius * 10;
-    return [near, far];
+    // Near: 1% of camera distance — never clips through objects regardless of radius.
+    // Far:  fixed value set at fitCamera time so objects disappear on extreme zoom-out.
+    const near = Math.max(0.001, this._distance * 0.01);
+    return [near, this._far];
   }
 
   /**
@@ -138,6 +140,7 @@ export class ArcballCamera {
     void center; // center is used implicitly by the caller via worldPos
     this._radius   = radius;
     this._distance = radius * 2.5;
+    this._far      = radius * 25;
     this.camAzimuth   = 0;
     this.camElevation = 0.3;
   }

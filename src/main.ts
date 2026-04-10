@@ -123,6 +123,7 @@ function expandToFlat(vd: Float32Array, id: Uint32Array): Float32Array {
       // uv
       out[s+9] = vd[vi * 8 + 6]; out[s+10] = vd[vi * 8 + 7];
     }
+
   }
   return out;
 }
