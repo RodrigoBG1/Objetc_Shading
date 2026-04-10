@@ -473,7 +473,7 @@ let selectedIndex = -1;
 const camera = new ArcballCamera(canvas);
 camera.objectSelected = false;
 
-const LIGHT_POS: Vec3 = [3, 6, 7];
+
 
 function sceneTarget(): Vec3 {
   return selectedIndex >= 0 && objects[selectedIndex]
@@ -773,6 +773,7 @@ function frame(now: number): void {
   const target = sceneTarget();
   const view   = camera.getViewMatrix(target);
   const camPos = camera.getCamPos(target);
+  const lightPos: Vec3 = [camPos[0], camPos[1] + 5, camPos[2]];
 
   const identityRot = quatToMat4([0, 0, 0, 1]);
   const objectRot   = selectedIndex >= 0 && objects[selectedIndex]
@@ -798,7 +799,7 @@ function frame(now: number): void {
     const obj = objects[i];
     const isSelected = i === selectedIndex;
     const rot = isSelected ? objectRot : quatToMat4(obj.savedRotation);
-    obj.uploadUniforms(rot, view, proj, LIGHT_POS, lightColor, camPos, globalGui.renderMode, t, isSelected);
+    obj.uploadUniforms(rot, view, proj, lightPos, lightColor, camPos, globalGui.renderMode, t, isSelected);
     pass.setBindGroup(0, obj.bindGroup);
     pass.setVertexBuffer(0, obj.vertexBuffer);
     pass.draw(obj.drawCount);

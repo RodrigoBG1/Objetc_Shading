@@ -73,7 +73,7 @@ export class ArcballCamera {
 
   private _distance = 9;
   private _radius   = 1; // used to clamp minimum zoom distance
-  private _far      = 200; // fixed far plane; set by fitCamera
+  private _far      = 60; // fixed far plane; set by fitCamera
 
   /** When true, mouse drag rotates the selected object; otherwise orbits camera. */
   objectSelected = false;
@@ -140,7 +140,7 @@ export class ArcballCamera {
     void center; // center is used implicitly by the caller via worldPos
     this._radius   = radius;
     this._distance = radius * 2.5;
-    this._far      = radius * 25;
+    this._far      = radius * 10;
     this.camAzimuth   = 0;
     this.camElevation = 0.3;
   }
